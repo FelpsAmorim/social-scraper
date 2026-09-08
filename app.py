@@ -20,9 +20,8 @@ from pydantic import BaseModel
 
 app = FastAPI(
     title="Social Scraper API",
-    version="2.1.0"
+    version="2.2.0"
 )
-
 
 MAX_COMMENTS = 30
 
@@ -98,12 +97,14 @@ def detect_platform(url: str) -> str:
     if hostname.startswith("www."):
         hostname = hostname[4:]
 
+    # Instagram
     if hostname in [
         "instagram.com",
         "instagr.am"
     ]:
         return "instagram"
 
+    # TikTok
     if hostname in [
         "tiktok.com",
         "vm.tiktok.com",
@@ -111,6 +112,7 @@ def detect_platform(url: str) -> str:
     ]:
         return "tiktok"
 
+    # YouTube
     if hostname in [
         "youtube.com",
         "youtu.be",
@@ -119,6 +121,7 @@ def detect_platform(url: str) -> str:
     ]:
         return "youtube"
 
+    # X / Twitter
     if hostname in [
         "twitter.com",
         "x.com",
@@ -127,6 +130,7 @@ def detect_platform(url: str) -> str:
     ]:
         return "twitter"
 
+    # Facebook
     if hostname in [
         "facebook.com",
         "m.facebook.com",
@@ -152,6 +156,7 @@ def extract_instagram_shortcode(url: str):
     ]
 
     for pattern in patterns:
+
         match = re.search(
             pattern,
             url
@@ -195,6 +200,7 @@ def scrape_instagram(
     media = []
 
     try:
+
         if post.typename == "GraphSidecar":
 
             for node in post.get_sidecar_nodes():
@@ -214,6 +220,7 @@ def scrape_instagram(
             )
 
     except Exception as error:
+
         print(
             "Erro ao coletar midia Instagram:",
             str(error)
@@ -225,7 +232,10 @@ def scrape_instagram(
         "source": "instaloader",
         "url": url,
         "author": post.owner_username,
-        "description": post.caption or None,
+        "description": (
+            post.caption
+            or None
+        ),
         "date": (
             post.date_utc.isoformat()
             if post.date_utc
@@ -302,10 +312,19 @@ def scrape_ytdlp(
             or info.get("channel")
             or info.get("creator")
         ),
-        "description": description or None,
-        "title": info.get("title"),
-        "date": info.get("upload_date"),
-        "likes": info.get("like_count"),
+        "description": (
+            description
+            or None
+        ),
+        "title": info.get(
+            "title"
+        ),
+        "date": info.get(
+            "upload_date"
+        ),
+        "likes": info.get(
+            "like_count"
+        ),
         "comments_count": info.get(
             "comment_count"
         ),
@@ -316,20 +335,28 @@ def scrape_ytdlp(
 
 
 # ==========================================================
-# GALLERY-DL
+# GALLERY-DL - X / TWITTER
 # ==========================================================
 
-def scrape_gallery_dl(
-    url: str,
-    platform: str
+def scrape_twitter_gallery_dl(
+    url: str
 ):
 
     cookie_file = get_cookie_file()
 
     command = [
         "gallery-dl",
-        "--verbose",
-        "--dump-json"
+        "--simulate",
+        "--print",
+        "CONTENT::{content}",
+        "--print",
+        "AUTHOR::{author[name]}",
+        "--print",
+        "USERNAME::{author[nick]}",
+        "--print",
+        "TWEET_ID::{tweet_id}",
+        "--print",
+        "DATE::{date}"
     ]
 
     if cookie_file:
@@ -356,10 +383,209 @@ def scrape_gallery_dl(
             or "gallery-dl falhou."
         )
 
+    output = process.stdout.strip()
+
+    if not output:
+
+        raise Exception(
+            "gallery-dl nao retornou dados."
+        )
+
+    description = None
+    author = None
+    username = None
+    tweet_id = None
+    date = None
+
+    for line in output.splitlines():
+
+        line = line.strip()
+
+        if line.startswith(
+            "CONTENT::"
+        ):
+
+            value = line.replace(
+                "CONTENT::",
+                "",
+                1
+            ).strip()
+
+            if (
+                value
+                and value.lower()
+                not in [
+                    "none",
+                    "null"
+                ]
+            ):
+                description = value
+
+        elif line.startswith(
+            "AUTHOR::"
+        ):
+
+            value = line.replace(
+                "AUTHOR::",
+                "",
+                1
+            ).strip()
+
+            if (
+                value
+                and value.lower()
+                not in [
+                    "none",
+                    "null"
+                ]
+            ):
+                author = value
+
+        elif line.startswith(
+            "USERNAME::"
+        ):
+
+            value = line.replace(
+                "USERNAME::",
+                "",
+                1
+            ).strip()
+
+            if (
+                value
+                and value.lower()
+                not in [
+                    "none",
+                    "null"
+                ]
+            ):
+                username = value
+
+        elif line.startswith(
+            "TWEET_ID::"
+        ):
+
+            value = line.replace(
+                "TWEET_ID::",
+                "",
+                1
+            ).strip()
+
+            if (
+                value
+                and value.lower()
+                not in [
+                    "none",
+                    "null"
+                ]
+            ):
+                tweet_id = value
+
+        elif line.startswith(
+            "DATE::"
+        ):
+
+            value = line.replace(
+                "DATE::",
+                "",
+                1
+            ).strip()
+
+            if (
+                value
+                and value.lower()
+                not in [
+                    "none",
+                    "null"
+                ]
+            ):
+                date = value
+
+    # Se conseguimos identificar username,
+    # mas nao o nome completo, usa username.
+    if not author and username:
+        author = username
+
+    # Importante:
+    # se o gallery-dl executou mas nao trouxe
+    # conteudo algum, consideramos falha.
+    # Assim o sistema tenta o yt-dlp.
+    if not description:
+
+        raise Exception(
+            "gallery-dl acessou o post, "
+            "mas nao retornou o campo content. "
+            "STDOUT: "
+            + output[:2000]
+        )
+
+    return {
+        "success": True,
+        "platform": "twitter",
+        "source": "gallery-dl",
+        "url": url,
+        "author": author,
+        "username": username,
+        "description": description,
+        "tweet_id": tweet_id,
+        "date": date,
+        "comments": [],
+        "comments_accessible": False,
+        "media": []
+    }
+
+
+# ==========================================================
+# GALLERY-DL - GENERICO
+# ==========================================================
+
+def scrape_gallery_dl(
+    url: str,
+    platform: str
+):
+
+    # X possui tratamento especifico
+    if platform == "twitter":
+
+        return scrape_twitter_gallery_dl(
+            url
+        )
+
+    cookie_file = get_cookie_file()
+
+    command = [
+        "gallery-dl",
+        "--dump-json"
+    ]
+
+    if cookie_file:
+
+        command.extend([
+            "--cookies",
+            cookie_file
+        ])
+
+    command.append(
+        url
+    )
+
+    process = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        timeout=60
+    )
+
+    if process.returncode != 0:
+
+        raise Exception(
+            process.stderr.strip()
+            or "gallery-dl falhou."
+        )
+
     lines = [
         line
-        for line
-        in process.stdout.splitlines()
+        for line in process.stdout.splitlines()
         if line.strip()
     ]
 
@@ -368,14 +594,18 @@ def scrape_gallery_dl(
     for line in lines:
 
         try:
+
             items.append(
-                json.loads(line)
+                json.loads(
+                    line
+                )
             )
 
         except Exception:
             continue
 
     if not items:
+
         raise Exception(
             "gallery-dl nao retornou dados."
         )
@@ -394,6 +624,10 @@ def scrape_gallery_dl(
             dict
         ):
 
+            # ------------------------------------------
+            # DESCRICAO
+            # ------------------------------------------
+
             if not description:
 
                 possible_description = (
@@ -410,9 +644,14 @@ def scrape_gallery_dl(
                     possible_description,
                     str
                 ):
+
                     description = (
                         possible_description
                     )
+
+            # ------------------------------------------
+            # AUTOR
+            # ------------------------------------------
 
             if not author:
 
@@ -429,9 +668,14 @@ def scrape_gallery_dl(
                     possible_author,
                     str
                 ):
+
                     author = (
                         possible_author
                     )
+
+            # ------------------------------------------
+            # MIDIA
+            # ------------------------------------------
 
             possible_url = value.get(
                 "url"
@@ -446,12 +690,15 @@ def scrape_gallery_dl(
                     "http"
                 )
             ):
+
                 media.append(
                     possible_url
                 )
 
             for child in value.values():
-                walk(child)
+                walk(
+                    child
+                )
 
         elif isinstance(
             value,
@@ -459,9 +706,13 @@ def scrape_gallery_dl(
         ):
 
             for child in value:
-                walk(child)
+                walk(
+                    child
+                )
 
-    walk(items)
+    walk(
+        items
+    )
 
     media = list(
         dict.fromkeys(
@@ -501,36 +752,42 @@ def scrape_with_fallback(
     if platform == "instagram":
 
         try:
+
             return scrape_instagram(
                 url,
                 max_comments
             )
 
         except Exception as error:
+
             errors.append(
                 "Instaloader: "
                 + str(error)
             )
 
         try:
+
             return scrape_ytdlp(
                 url,
                 platform
             )
 
         except Exception as error:
+
             errors.append(
                 "yt-dlp: "
                 + str(error)
             )
 
         try:
+
             return scrape_gallery_dl(
                 url,
                 platform
             )
 
         except Exception as error:
+
             errors.append(
                 "gallery-dl: "
                 + str(error)
@@ -544,25 +801,29 @@ def scrape_with_fallback(
 
         # Primeiro gallery-dl
         try:
+
             return scrape_gallery_dl(
                 url,
                 platform
             )
 
         except Exception as error:
+
             errors.append(
                 "gallery-dl: "
                 + str(error)
             )
 
-        # Depois yt-dlp
+        # Fallback para yt-dlp
         try:
+
             return scrape_ytdlp(
                 url,
                 platform
             )
 
         except Exception as error:
+
             errors.append(
                 "yt-dlp: "
                 + str(error)
@@ -575,24 +836,28 @@ def scrape_with_fallback(
     elif platform == "facebook":
 
         try:
+
             return scrape_ytdlp(
                 url,
                 platform
             )
 
         except Exception as error:
+
             errors.append(
                 "yt-dlp: "
                 + str(error)
             )
 
         try:
+
             return scrape_gallery_dl(
                 url,
                 platform
             )
 
         except Exception as error:
+
             errors.append(
                 "gallery-dl: "
                 + str(error)
@@ -605,24 +870,28 @@ def scrape_with_fallback(
     elif platform == "tiktok":
 
         try:
+
             return scrape_ytdlp(
                 url,
                 platform
             )
 
         except Exception as error:
+
             errors.append(
                 "yt-dlp: "
                 + str(error)
             )
 
         try:
+
             return scrape_gallery_dl(
                 url,
                 platform
             )
 
         except Exception as error:
+
             errors.append(
                 "gallery-dl: "
                 + str(error)
@@ -635,12 +904,14 @@ def scrape_with_fallback(
     elif platform == "youtube":
 
         try:
+
             return scrape_ytdlp(
                 url,
                 platform
             )
 
         except Exception as error:
+
             errors.append(
                 "yt-dlp: "
                 + str(error)
@@ -653,24 +924,28 @@ def scrape_with_fallback(
     else:
 
         try:
+
             return scrape_ytdlp(
                 url,
                 platform
             )
 
         except Exception as error:
+
             errors.append(
                 "yt-dlp: "
                 + str(error)
             )
 
         try:
+
             return scrape_gallery_dl(
                 url,
                 platform
             )
 
         except Exception as error:
+
             errors.append(
                 "gallery-dl: "
                 + str(error)
@@ -751,5 +1026,5 @@ def health():
                 "SOCIAL_COOKIES_BASE64"
             )
         ),
-        "version": "2.1.0"
+        "version": "2.2.0"
     }

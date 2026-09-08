@@ -662,37 +662,29 @@ def scrape_with_fallback(
 
     elif platform == "twitter":
 
-        # Primeiro yt-dlp com cookies
+    # Primeiro gallery-dl, mais adequado para post/metadados
+    try:
+        return scrape_gallery_dl(
+            url,
+            platform
+        )
 
-        try:
+    except Exception as error:
+        errors.append(
+            "gallery-dl: " + str(error)
+        )
 
-            return scrape_ytdlp(
-                url,
-                platform
-            )
+    # Fallback para yt-dlp
+    try:
+        return scrape_ytdlp(
+            url,
+            platform
+        )
 
-        except Exception as error:
-
-            errors.append(
-                "yt-dlp: "
-                + str(error)
-            )
-
-        # Depois gallery-dl
-
-        try:
-
-            return scrape_gallery_dl(
-                url,
-                platform
-            )
-
-        except Exception as error:
-
-            errors.append(
-                "gallery-dl: "
-                + str(error)
-            )
+    except Exception as error:
+        errors.append(
+            "yt-dlp: " + str(error)
+        )
 
     # ======================================================
     # FACEBOOK

@@ -4,6 +4,7 @@ import json
 import base64
 import tempfile
 import subprocess
+import requests
 
 from urllib.parse import urlparse
 
@@ -20,7 +21,7 @@ from pydantic import BaseModel
 
 app = FastAPI(
     title="Social Scraper API",
-    version="2.2.0"
+    version="2.3.0"
 )
 
 MAX_COMMENTS = 30
@@ -40,12 +41,6 @@ class ScrapeRequest(BaseModel):
 # ==========================================================
 
 def get_cookie_file():
-    """
-    Le SOCIAL_COOKIES_BASE64 do ambiente do Render,
-    decodifica e cria temporariamente um cookies.txt.
-
-    Retorna o caminho do arquivo ou None.
-    """
 
     cookies_base64 = os.getenv(
         "SOCIAL_COOKIES_BASE64"
@@ -55,6 +50,7 @@ def get_cookie_file():
         return None
 
     try:
+
         cookie_bytes = base64.b64decode(
             cookies_base64
         )
@@ -68,6 +64,7 @@ def get_cookie_file():
             cookie_path,
             "wb"
         ) as file:
+
             file.write(
                 cookie_bytes
             )
@@ -75,6 +72,7 @@ def get_cookie_file():
         return cookie_path
 
     except Exception as error:
+
         print(
             "Erro ao carregar cookies:",
             str(error)
@@ -97,14 +95,12 @@ def detect_platform(url: str) -> str:
     if hostname.startswith("www."):
         hostname = hostname[4:]
 
-    # Instagram
     if hostname in [
         "instagram.com",
         "instagr.am"
     ]:
         return "instagram"
 
-    # TikTok
     if hostname in [
         "tiktok.com",
         "vm.tiktok.com",
@@ -112,7 +108,6 @@ def detect_platform(url: str) -> str:
     ]:
         return "tiktok"
 
-    # YouTube
     if hostname in [
         "youtube.com",
         "youtu.be",
@@ -121,7 +116,6 @@ def detect_platform(url: str) -> str:
     ]:
         return "youtube"
 
-    # X / Twitter
     if hostname in [
         "twitter.com",
         "x.com",
@@ -130,7 +124,6 @@ def detect_platform(url: str) -> str:
     ]:
         return "twitter"
 
-    # Facebook
     if hostname in [
         "facebook.com",
         "m.facebook.com",
@@ -178,6 +171,7 @@ def scrape_instagram(
     )
 
     if not shortcode:
+
         raise Exception(
             "Nao foi possivel identificar "
             "o shortcode do Instagram."
@@ -232,10 +226,7 @@ def scrape_instagram(
         "source": "instaloader",
         "url": url,
         "author": post.owner_username,
-        "description": (
-            post.caption
-            or None
-        ),
+        "description": post.caption or None,
         "date": (
             post.date_utc.isoformat()
             if post.date_utc
@@ -246,6 +237,195 @@ def scrape_instagram(
         "comments": [],
         "comments_accessible": False,
         "media": media
+    }
+
+
+# ==========================================================
+# X / TWITTER - FXTWITTER
+# ==========================================================
+
+def extract_twitter_parts(url: str):
+
+    match = re.search(
+        r"(?:x\.com|twitter\.com)/([^/]+)/status/(\d+)",
+        url
+    )
+
+    if not match:
+        return None, None
+
+    username = match.group(1)
+    tweet_id = match.group(2)
+
+    return username, tweet_id
+
+
+def scrape_twitter_fxtwitter(url: str):
+
+    username, tweet_id = extract_twitter_parts(
+        url
+    )
+
+    if not username or not tweet_id:
+
+        raise Exception(
+            "Nao foi possivel identificar "
+            "usuario e tweet_id do X."
+        )
+
+    api_url = (
+        "https://api.fxtwitter.com/"
+        + username
+        + "/status/"
+        + tweet_id
+    )
+
+    response = requests.get(
+        api_url,
+        timeout=20,
+        headers={
+            "User-Agent":
+                "GeoPulse-Social-Scraper/1.0"
+        }
+    )
+
+    if response.status_code != 200:
+
+        raise Exception(
+            "FxTwitter HTTP "
+            + str(response.status_code)
+            + ": "
+            + response.text[:500]
+        )
+
+    data = response.json()
+
+    tweet = (
+        data.get("tweet")
+        or data.get("status")
+    )
+
+    if not tweet:
+
+        raise Exception(
+            "FxTwitter nao retornou "
+            "o objeto do post."
+        )
+
+    description = (
+        tweet.get("text")
+        or tweet.get("content")
+        or tweet.get("description")
+    )
+
+    author_data = (
+        tweet.get("author")
+        or {}
+    )
+
+    author = (
+        author_data.get("name")
+        or author_data.get("screen_name")
+        or author_data.get("username")
+        or author_data.get("nick")
+    )
+
+    media = []
+
+    media_data = tweet.get("media")
+
+    if isinstance(media_data, dict):
+
+        photos = (
+            media_data.get("photos")
+            or []
+        )
+
+        videos = (
+            media_data.get("videos")
+            or []
+        )
+
+        for item in photos:
+
+            if isinstance(item, dict):
+
+                media_url = (
+                    item.get("url")
+                    or item.get("media_url")
+                )
+
+                if media_url:
+                    media.append(
+                        media_url
+                    )
+
+        for item in videos:
+
+            if isinstance(item, dict):
+
+                media_url = (
+                    item.get("url")
+                    or item.get("thumbnail_url")
+                )
+
+                if media_url:
+                    media.append(
+                        media_url
+                    )
+
+    elif isinstance(media_data, list):
+
+        for item in media_data:
+
+            if isinstance(item, dict):
+
+                media_url = (
+                    item.get("url")
+                    or item.get("media_url")
+                    or item.get("thumbnail_url")
+                )
+
+                if media_url:
+                    media.append(
+                        media_url
+                    )
+
+    likes = (
+        tweet.get("likes")
+        or tweet.get("favorite_count")
+    )
+
+    replies = (
+        tweet.get("replies")
+        or tweet.get("reply_count")
+    )
+
+    date = (
+        tweet.get("created_at")
+        or tweet.get("date")
+    )
+
+    if not description:
+
+        raise Exception(
+            "FxTwitter acessou o post, "
+            "mas nao retornou texto."
+        )
+
+    return {
+        "success": True,
+        "platform": "twitter",
+        "source": "fxtwitter",
+        "url": url,
+        "author": author,
+        "description": description,
+        "date": date,
+        "likes": likes,
+        "comments_count": replies,
+        "comments": [],
+        "comments_accessible": False,
+        "media": media[:10]
     }
 
 
@@ -269,7 +449,10 @@ def scrape_ytdlp(
     }
 
     if cookie_file:
-        options["cookiefile"] = cookie_file
+
+        options["cookiefile"] = (
+            cookie_file
+        )
 
     with yt_dlp.YoutubeDL(
         options
@@ -281,6 +464,7 @@ def scrape_ytdlp(
         )
 
     if not info:
+
         raise Exception(
             "yt-dlp nao retornou dados."
         )
@@ -293,11 +477,12 @@ def scrape_ytdlp(
 
     media = []
 
-    thumbnail = info.get(
-        "thumbnail"
+    thumbnail = (
+        info.get("thumbnail")
     )
 
     if thumbnail:
+
         media.append(
             thumbnail
         )
@@ -335,7 +520,7 @@ def scrape_ytdlp(
 
 
 # ==========================================================
-# GALLERY-DL - X / TWITTER
+# GALLERY-DL - TWITTER
 # ==========================================================
 
 def scrape_twitter_gallery_dl(
@@ -360,6 +545,7 @@ def scrape_twitter_gallery_dl(
     ]
 
     if cookie_file:
+
         command.extend([
             "--cookies",
             cookie_file
@@ -411,14 +597,11 @@ def scrape_twitter_gallery_dl(
                 1
             ).strip()
 
-            if (
-                value
-                and value.lower()
-                not in [
-                    "none",
-                    "null"
-                ]
-            ):
+            if value and value.lower() not in [
+                "none",
+                "null"
+            ]:
+
                 description = value
 
         elif line.startswith(
@@ -431,14 +614,11 @@ def scrape_twitter_gallery_dl(
                 1
             ).strip()
 
-            if (
-                value
-                and value.lower()
-                not in [
-                    "none",
-                    "null"
-                ]
-            ):
+            if value and value.lower() not in [
+                "none",
+                "null"
+            ]:
+
                 author = value
 
         elif line.startswith(
@@ -451,14 +631,11 @@ def scrape_twitter_gallery_dl(
                 1
             ).strip()
 
-            if (
-                value
-                and value.lower()
-                not in [
-                    "none",
-                    "null"
-                ]
-            ):
+            if value and value.lower() not in [
+                "none",
+                "null"
+            ]:
+
                 username = value
 
         elif line.startswith(
@@ -471,14 +648,11 @@ def scrape_twitter_gallery_dl(
                 1
             ).strip()
 
-            if (
-                value
-                and value.lower()
-                not in [
-                    "none",
-                    "null"
-                ]
-            ):
+            if value and value.lower() not in [
+                "none",
+                "null"
+            ]:
+
                 tweet_id = value
 
         elif line.startswith(
@@ -491,32 +665,22 @@ def scrape_twitter_gallery_dl(
                 1
             ).strip()
 
-            if (
-                value
-                and value.lower()
-                not in [
-                    "none",
-                    "null"
-                ]
-            ):
+            if value and value.lower() not in [
+                "none",
+                "null"
+            ]:
+
                 date = value
 
-    # Se conseguimos identificar username,
-    # mas nao o nome completo, usa username.
     if not author and username:
+
         author = username
 
-    # Importante:
-    # se o gallery-dl executou mas nao trouxe
-    # conteudo algum, consideramos falha.
-    # Assim o sistema tenta o yt-dlp.
     if not description:
 
         raise Exception(
             "gallery-dl acessou o post, "
-            "mas nao retornou o campo content. "
-            "STDOUT: "
-            + output[:2000]
+            "mas nao retornou content."
         )
 
     return {
@@ -525,7 +689,6 @@ def scrape_twitter_gallery_dl(
         "source": "gallery-dl",
         "url": url,
         "author": author,
-        "username": username,
         "description": description,
         "tweet_id": tweet_id,
         "date": date,
@@ -536,7 +699,7 @@ def scrape_twitter_gallery_dl(
 
 
 # ==========================================================
-# GALLERY-DL - GENERICO
+# GALLERY-DL GENERICO
 # ==========================================================
 
 def scrape_gallery_dl(
@@ -544,7 +707,6 @@ def scrape_gallery_dl(
     platform: str
 ):
 
-    # X possui tratamento especifico
     if platform == "twitter":
 
         return scrape_twitter_gallery_dl(
@@ -624,10 +786,6 @@ def scrape_gallery_dl(
             dict
         ):
 
-            # ------------------------------------------
-            # DESCRICAO
-            # ------------------------------------------
-
             if not description:
 
                 possible_description = (
@@ -649,10 +807,6 @@ def scrape_gallery_dl(
                         possible_description
                     )
 
-            # ------------------------------------------
-            # AUTOR
-            # ------------------------------------------
-
             if not author:
 
                 possible_author = (
@@ -673,12 +827,8 @@ def scrape_gallery_dl(
                         possible_author
                     )
 
-            # ------------------------------------------
-            # MIDIA
-            # ------------------------------------------
-
-            possible_url = value.get(
-                "url"
+            possible_url = (
+                value.get("url")
             )
 
             if (
@@ -695,7 +845,10 @@ def scrape_gallery_dl(
                     possible_url
                 )
 
-            for child in value.values():
+            for child in (
+                value.values()
+            ):
+
                 walk(
                     child
                 )
@@ -706,6 +859,7 @@ def scrape_gallery_dl(
         ):
 
             for child in value:
+
                 walk(
                     child
                 )
@@ -799,7 +953,21 @@ def scrape_with_fallback(
 
     elif platform == "twitter":
 
-        # Primeiro gallery-dl
+        # 1 - FxTwitter
+        try:
+
+            return scrape_twitter_fxtwitter(
+                url
+            )
+
+        except Exception as error:
+
+            errors.append(
+                "FxTwitter: "
+                + str(error)
+            )
+
+        # 2 - gallery-dl
         try:
 
             return scrape_gallery_dl(
@@ -814,7 +982,7 @@ def scrape_with_fallback(
                 + str(error)
             )
 
-        # Fallback para yt-dlp
+        # 3 - yt-dlp
         try:
 
             return scrape_ytdlp(
@@ -970,7 +1138,7 @@ def scrape_with_fallback(
 
 
 # ==========================================================
-# ENDPOINT SCRAPE
+# SCRAPE ENDPOINT
 # ==========================================================
 
 @app.post("/scrape")
@@ -1013,7 +1181,7 @@ def scrape(
 
 
 # ==========================================================
-# HEALTH CHECK
+# HEALTH
 # ==========================================================
 
 @app.get("/health")
@@ -1026,5 +1194,5 @@ def health():
                 "SOCIAL_COOKIES_BASE64"
             )
         ),
-        "version": "2.2.0"
+        "version": "2.3.0"
     }
